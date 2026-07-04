@@ -154,19 +154,6 @@ SeftFlow does not currently provide multi-user/multi-tenant support, team permis
 - Local development entrypoint: root `justfile`; if `just` is unavailable, raw commands are listed below.
 - Docs: `docs/PRD.md`, `docs/USER_GUIDE.md`, `docs/ARCHITECTURE.md`, `docs/ARCHITECTURE_HEALTH_REVIEW.md`, `docs/ROADMAP.md`, `CHANGELOG.md`.
 
-## Open Source Dependencies and Thanks
-
-Special thanks first to the sincere, kind, united, and professional Linuxdo community.
-
-<p>
-  <a href="https://linux.do">
-    <img src="https://img.shields.io/badge/LinuxDo-community-1f6feb" alt="LinuxDo">
-  </a>
-</p>
-
-
-Thanks also to the open-source ecosystem behind SeftFlow: FastAPI, SQLAlchemy, Dramatiq, React, Vite, and the Google Agent Development Kit (ADK) and Model Context Protocol SDK that power the Copilot and MCP server.
-
 ## Repository Structure
 
 ```text
