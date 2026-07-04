@@ -143,7 +143,6 @@ SeftFlow does not currently provide multi-user/multi-tenant support, team permis
 - Architecture guide: `docs/ARCHITECTURE.md`
 - Current architecture health review: `docs/ARCHITECTURE_HEALTH_REVIEW.md`
 - Roadmap: `docs/ROADMAP.md`
-- Version history: `CHANGELOG.md`
 - Brand assets: `docs/assets/seftflow-brand-concept.png`, `docs/assets/seftflow-mark.svg`
 - Web metadata / favicon assets: `web/public/seftflow-brand-concept.png`, `web/public/seftflow-mark.svg`
 
@@ -152,7 +151,7 @@ SeftFlow does not currently provide multi-user/multi-tenant support, team permis
 - Backend: Python 3.12, FastAPI, SQLAlchemy, Alembic, Dramatiq, Redis, PostgreSQL, Pillow, OpenAI Python SDK.
 - Frontend: React 19, Vite, TypeScript, React Router, TanStack Query, Tailwind CSS 4.
 - Local development entrypoint: root `justfile`; if `just` is unavailable, raw commands are listed below.
-- Docs: `docs/PRD.md`, `docs/USER_GUIDE.md`, `docs/ARCHITECTURE.md`, `docs/ARCHITECTURE_HEALTH_REVIEW.md`, `docs/ROADMAP.md`, `CHANGELOG.md`.
+- Docs: `docs/PRD.md`, `docs/USER_GUIDE.md`, `docs/ARCHITECTURE.md`, `docs/ARCHITECTURE_HEALTH_REVIEW.md`, `docs/ROADMAP.md`.
 
 ## Repository Structure
 
@@ -161,7 +160,6 @@ SeftFlow/
   README.md
   LICENSE
   SECURITY.md
-  CHANGELOG.md
   .env.example
   .env.dev.example
   docker-compose.yml
