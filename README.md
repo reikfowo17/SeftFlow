@@ -132,23 +132,6 @@ See `skills/seftflow/SKILL.md` for the invocation template and MCP client config
 - **Deletion flag**: destructive operations stay gated by the backend `deletion_enabled` setting.
 - **Quotas + rate limit**: a per-turn cap of 4 tool calls and a Redis-backed token bucket (with in-memory fallback) throttle each session.
 
-## Capstone Submission (Kaggle "AI Agents: Vibe Coding")
-
-Track: **Freestyle** - "SeftFlow Copilot, a personal AI design partner for solo sellers and indie creators."
-
-- Architecture: `docs/AGENT_ARCHITECTURE.md`
-- Writeup: `docs/CAPSTONE_WRITEUP.md`
-- Video script: `docs/CAPSTONE_VIDEO_SCRIPT.md`
-
-Reproduce in 5 commands:
-
-```bash
-git clone <repo> && cd SeftFlow
-cp .env.example .env       # fill in secrets + GEMINI_API_KEY
-docker compose up -d       # Postgres + Redis (+ backend/worker/web)
-just backend-migrate       # apply schema
-just backend-run           # API, then `just web-dev` for the UI
-```
 ## Current Boundaries
 
 SeftFlow does not currently provide multi-user/multi-tenant support, team permissions, payments, hosted account systems, automatic ad placement/listing, video generation, Kubernetes/Helm/released container images, or other production orchestration packages. The in-repository Docker Compose self-hosting path is available.
@@ -173,7 +156,7 @@ SeftFlow does not currently provide multi-user/multi-tenant support, team permis
 
 ## Open Source Dependencies and Thanks
 
-Beyond SeftFlow's application code, this repository keeps a set of project workflow assets for AI-assisted collaboration. Special thanks first to the sincere, kind, united, and professional Linuxdo community.
+Special thanks first to the sincere, kind, united, and professional Linuxdo community.
 
 <p>
   <a href="https://linux.do">
