@@ -1,0 +1,491 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from helpers import (
+    _enable_deletion,
+    _execute_workflow_queue_inline,
+    _login,
+    _make_demo_image_bytes,
+    _wait_for_workflow_run,
+)
+from sqlalchemy import event
+
+from productflow_backend.application.canvas_templates import get_builtin_canvas_template
+from productflow_backend.application.product_workflow.templates import TEMPLATE_METADATA_CONFIG_KEY
+from productflow_backend.application.use_cases import (
+    add_reference_images,
+    create_product,
+    list_products,
+)
+from productflow_backend.domain.enums import (
+    CopyStatus,
+    PosterKind,
+    ProductWorkflowState,
+    SourceAssetKind,
+)
+from productflow_backend.infrastructure.db.models import (
+    CopySet,
+    PosterVariant,
+    ProductWorkflow,
+    SourceAsset,
+    WorkflowEdge,
+    WorkflowNode,
+)
+
+
+@pytest.fixture(autouse=True)
+def _execute_workflow_queue_inline_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep API workflow tests deterministic while production delivery goes through Dramatiq."""
+
+    _execute_workflow_queue_inline(monkeypatch)
+
+
+def test_product_create_persists_source_note_for_ai_context(configured_env: Path) -> None:
+    from productflow_backend.presentation.api import create_app
+
+    app = create_app()
+    client = TestClient(app)
+    _login(client)
+
+    response = client.post(
+        "/api/products",
+        data={
+            "name": "camping thermos",
+            "category": "outdoor",
+            "price": "79.00",
+            "source_note": "316 stainless steel，highlights long-lasting insulation and cup holder fit。",
+        },
+        files={"image": ("cup.png", _make_demo_image_bytes(), "image/png")},
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["source_note"] == "316 stainless steel，highlights long-lasting insulation and cup holder fit。"
+
+    minimal = client.post(
+        "/api/products",
+        data={"name": "minimalproductcase"},
+        files={"image": ("minimal.png", _make_demo_image_bytes(), "image/png")},
+    )
+    assert minimal.status_code == 201
+    minimal_payload = minimal.json()
+    assert minimal_payload["category"] is None
+    assert minimal_payload["price"] is None
+    assert minimal_payload["source_note"] is None
+
+
+def test_default_product_create_preserves_lazy_workflow_behavior(configured_env: Path, db_session) -> None:
+    from productflow_backend.presentation.api import create_app
+
+    app = create_app()
+    client = TestClient(app)
+    _login(client)
+
+    created = client.post(
+        "/api/products",
+        data={"name": "default canvasproduct"},
+        files={"image": ("default.png", _make_demo_image_bytes(), "image/png")},
+    )
+
+    assert created.status_code == 201
+    product_id = created.json()["id"]
+    db_session.expire_all()
+    assert db_session.query(ProductWorkflow).filter_by(product_id=product_id).count() == 0
+
+    workflow_response = client.get(f"/api/products/{product_id}/workflow")
+    assert workflow_response.status_code == 200
+    workflow = workflow_response.json()
+    assert len(workflow["nodes"]) == 4
+    assert len(workflow["edges"]) == 4
+    assert {node["title"] for node in workflow["nodes"]} == {"Product", "Copy", "image generation", "Reference image"}
+
+    default_key = client.post(
+        "/api/products",
+        data={"name": "explicit default canvas product", "canvas_template_key": "default"},
+        files={"image": ("explicit-default.png", _make_demo_image_bytes(), "image/png")},
+    )
+    assert default_key.status_code == 201
+    db_session.expire_all()
+    assert db_session.query(ProductWorkflow).filter_by(product_id=default_key.json()["id"]).count() == 0
+
+
+def test_product_create_materializes_full_canvas_template(configured_env: Path, db_session) -> None:
+    from productflow_backend.presentation.api import create_app
+
+    template = get_builtin_canvas_template("ecommerce-main-image-v1")
+    app = create_app()
+    client = TestClient(app)
+    _login(client)
+
+    created = client.post(
+        "/api/products",
+        data={"name": "template canvasproduct", "canvas_template_key": template.key},
+        files={"image": ("template.png", _make_demo_image_bytes(), "image/png")},
+    )
+
+    assert created.status_code == 201
+    product_id = created.json()["id"]
+    db_session.expire_all()
+    workflow = db_session.query(ProductWorkflow).filter_by(product_id=product_id, active=True).one()
+    assert workflow.title == template.title
+
+    nodes = db_session.query(WorkflowNode).filter_by(workflow_id=workflow.id).all()
+    edges = db_session.query(WorkflowEdge).filter_by(workflow_id=workflow.id).all()
+    assert len(nodes) == len(template.nodes)
+    assert len(edges) == len(template.edges)
+
+    persisted_node_ids_by_template_key: dict[str, str] = {}
+    unmatched_nodes = list(nodes)
+    for template_node in template.nodes:
+        matched_node = next(
+            (
+                node
+                for node in unmatched_nodes
+                if node.node_type == template_node.node_type
+                and node.title == template_node.title
+                and node.position_x == template_node.position_x
+                and node.position_y == template_node.position_y
+                and node.config_json == {
+                    **template_node.config_json,
+                    TEMPLATE_METADATA_CONFIG_KEY: {
+                        "source": "builtin",
+                        "template_key": template.key,
+                        "node_key": template_node.key,
+                    },
+                }
+            ),
+            None,
+        )
+        assert matched_node is not None
+        unmatched_nodes.remove(matched_node)
+        persisted_node_ids_by_template_key[template_node.key] = matched_node.id
+
+    assert set(persisted_node_ids_by_template_key) == {node.key for node in template.nodes}
+    persisted_edges = {
+        (edge.source_node_id, edge.target_node_id, edge.source_handle, edge.target_handle) for edge in edges
+    }
+    assert persisted_edges == {
+        (
+            persisted_node_ids_by_template_key[edge.source_node_key],
+            persisted_node_ids_by_template_key[edge.target_node_key],
+            edge.source_handle,
+            edge.target_handle,
+        )
+        for edge in template.edges
+    }
+
+    workflow_response = client.get(f"/api/products/{product_id}/workflow")
+    assert workflow_response.status_code == 200
+    assert workflow_response.json()["id"] == workflow.id
+
+
+def test_product_create_rejects_invalid_canvas_template_key(configured_env: Path) -> None:
+    from productflow_backend.presentation.api import create_app
+
+    app = create_app()
+    client = TestClient(app)
+    _login(client)
+
+    response = client.post(
+        "/api/products",
+        data={"name": "bad templateproduct", "canvas_template_key": "missing-template"},
+        files={"image": ("missing.png", _make_demo_image_bytes(), "image/png")},
+    )
+
+    assert response.status_code == 400
+    assert "Canvas template not found" in response.json()["detail"]
+
+
+def test_product_create_accepts_broad_builtin_canvas_template_key(configured_env: Path, db_session) -> None:
+    from productflow_backend.presentation.api import create_app
+
+    template = get_builtin_canvas_template("ecommerce-sku-variant-image-v1")
+    app = create_app()
+    client = TestClient(app)
+    _login(client)
+
+    response = client.post(
+        "/api/products",
+        data={"name": "spec templateproduct", "canvas_template_key": template.key},
+        files={"image": ("sku-template.png", _make_demo_image_bytes(), "image/png")},
+    )
+
+    assert response.status_code == 201
+    product_id = response.json()["id"]
+    db_session.expire_all()
+    workflow = db_session.query(ProductWorkflow).filter_by(product_id=product_id, active=True).one()
+    assert workflow.title == template.title
+    assert db_session.query(WorkflowNode).filter_by(workflow_id=workflow.id).count() == len(template.nodes)
+    assert db_session.query(WorkflowEdge).filter_by(workflow_id=workflow.id).count() == len(template.edges)
+
+
+def test_legacy_jobrun_routes_are_removed(configured_env: Path) -> None:
+    from productflow_backend.presentation.api import create_app
+
+    app = create_app()
+    client = TestClient(app)
+    _login(client)
+
+    created = client.post(
+        "/api/products",
+        data={"name": "no traditional taskproduct"},
+        files={"image": ("legacy.png", _make_demo_image_bytes(), "image/png")},
+    )
+    assert created.status_code == 201
+    product_id = created.json()["id"]
+
+    assert client.post(f"/api/products/{product_id}/copy-jobs").status_code == 404
+    assert client.post(f"/api/products/{product_id}/poster-jobs").status_code == 404
+    assert client.post("/api/posters/missing/regenerate").status_code == 404
+    assert client.get("/api/jobs/missing").status_code == 404
+
+    history = client.get(f"/api/products/{product_id}/history")
+    assert history.status_code == 200
+    assert set(history.json()) == {"copy_sets", "poster_variants"}
+
+
+def test_product_can_be_deleted_from_api(configured_env: Path) -> None:
+    from productflow_backend.presentation.api import create_app
+
+    app = create_app()
+    client = TestClient(app)
+    _login(client)
+
+    created = client.post(
+        "/api/products",
+        data={"name": "to deleteproduct"},
+        files={"image": ("delete.png", _make_demo_image_bytes(), "image/png")},
+    )
+    assert created.status_code == 201
+    product_id = created.json()["id"]
+    product_root = configured_env / "products" / product_id
+    assert product_root.exists()
+    run = client.post(f"/api/products/{product_id}/workflow/run", json={})
+    assert run.status_code == 200
+    completed = _wait_for_workflow_run(client, product_id, status="succeeded")
+    assert completed["runs"][0]["node_runs"]
+    product_with_artifacts = client.get(f"/api/products/{product_id}")
+    assert product_with_artifacts.status_code == 200
+    assert product_with_artifacts.json()["copy_sets"]
+    assert product_with_artifacts.json()["poster_variants"]
+
+    _enable_deletion(client)
+    deleted = client.delete(f"/api/products/{product_id}")
+    assert deleted.status_code == 204
+    assert deleted.content == b""
+
+    listed = client.get("/api/products")
+    assert listed.status_code == 200
+    assert product_id not in {item["id"] for item in listed.json()["items"]}
+    missing = client.get(f"/api/products/{product_id}")
+    assert missing.status_code == 404
+    assert not product_root.exists()
+
+def test_reference_images_can_be_attached_to_product(db_session, configured_env: Path) -> None:
+    product = create_product(
+        db_session,
+        name="ceramic mug",
+        category="home goods",
+        price="39.00",
+        source_note=None,
+        image_bytes=_make_demo_image_bytes(),
+        filename="mug.png",
+        content_type="image/png",
+    )
+
+    updated = add_reference_images(
+        db_session,
+        product_id=product.id,
+        reference_image_uploads=[
+            (_make_demo_image_bytes(), "sample-1.png", "image/png"),
+            (_make_demo_image_bytes(), "sample-2.png", "image/png"),
+        ],
+    )
+
+    reference_assets = [asset for asset in updated.source_assets if asset.kind == SourceAssetKind.REFERENCE_IMAGE]
+    assert len(reference_assets) == 2
+    assert all((Path(configured_env) / asset.storage_path).exists() for asset in reference_assets)
+
+
+def test_product_status_filter_uses_database_pagination_before_eager_loading(db_session, configured_env: Path) -> None:
+    draft = create_product(
+        db_session,
+        name="draftproduct",
+        category=None,
+        price=None,
+        source_note=None,
+        image_bytes=_make_demo_image_bytes(),
+        filename="draft.png",
+        content_type="image/png",
+    )
+    copy_ready = create_product(
+        db_session,
+        name="copyproduct",
+        category=None,
+        price=None,
+        source_note=None,
+        image_bytes=_make_demo_image_bytes(),
+        filename="copy.png",
+        content_type="image/png",
+    )
+    poster_ready = create_product(
+        db_session,
+        name="posterproduct",
+        category=None,
+        price=None,
+        source_note=None,
+        image_bytes=_make_demo_image_bytes(),
+        filename="poster.png",
+        content_type="image/png",
+    )
+
+    copy_set = CopySet(
+        product_id=copy_ready.id,
+        status=CopyStatus.CONFIRMED,
+        structured_payload={
+            "version": 2,
+            "summary": "poster title",
+            "content": {"kind": "blocks", "blocks": [{"id": "headline", "text": "title"}]},
+        },
+        model_structured_payload={
+            "version": 2,
+            "summary": "poster title",
+            "content": {"kind": "blocks", "blocks": [{"id": "headline", "text": "title"}]},
+        },
+        provider_name="test",
+        model_name="test",
+        prompt_version="test",
+    )
+    db_session.add(copy_set)
+    db_session.flush()
+    copy_ready.current_confirmed_copy_set_id = copy_set.id
+
+    poster_copy_set = CopySet(
+        product_id=poster_ready.id,
+        status=CopyStatus.CONFIRMED,
+        structured_payload={
+            "version": 2,
+            "summary": "poster title",
+            "content": {"kind": "blocks", "blocks": [{"id": "headline", "text": "title"}]},
+        },
+        model_structured_payload={
+            "version": 2,
+            "summary": "poster title",
+            "content": {"kind": "blocks", "blocks": [{"id": "headline", "text": "title"}]},
+        },
+        provider_name="test",
+        model_name="test",
+        prompt_version="test",
+    )
+    db_session.add(poster_copy_set)
+    db_session.flush()
+    poster_ready.current_confirmed_copy_set_id = poster_copy_set.id
+    db_session.add(
+        PosterVariant(
+            product_id=poster_ready.id,
+            copy_set_id=poster_copy_set.id,
+            kind=PosterKind.MAIN_IMAGE,
+            template_name="test",
+            storage_path="products/poster/poster.png",
+            width=800,
+            height=800,
+        )
+    )
+    db_session.commit()
+    db_session.expire_all()
+
+    product_selects: list[str] = []
+
+    @event.listens_for(db_session.bind, "before_cursor_execute")
+    def record_product_query(conn, cursor, statement, parameters, context, executemany):
+        normalized_statement = " ".join(statement.lower().split())
+        if (
+            normalized_statement.startswith("select products.id")
+            and "from products" in normalized_statement
+            and "limit" in normalized_statement
+        ):
+            product_selects.append(normalized_statement)
+
+    try:
+        products, total = list_products(
+            db_session,
+            status=ProductWorkflowState.DRAFT,
+            page=1,
+            page_size=1,
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", record_product_query)
+
+    assert total == 1
+    assert [product.id for product in products] == [draft.id]
+    assert len(product_selects) == 1
+    assert "exists" in product_selects[0]
+    assert "limit" in product_selects[0]
+
+    copy_products, copy_total = list_products(
+        db_session,
+        status=ProductWorkflowState.COPY_READY,
+        page=1,
+        page_size=10,
+    )
+    poster_products, poster_total = list_products(
+        db_session,
+        status=ProductWorkflowState.POSTER_READY,
+        page=1,
+        page_size=10,
+    )
+    failed_products, failed_total = list_products(
+        db_session,
+        status=ProductWorkflowState.FAILED,
+        page=1,
+        page_size=10,
+    )
+
+    assert copy_total == 1
+    assert [product.id for product in copy_products] == [copy_ready.id]
+    assert poster_total == 1
+    assert [product.id for product in poster_products] == [poster_ready.id]
+    assert failed_total == 0
+    assert failed_products == []
+
+
+def test_product_reference_image_can_be_deleted(configured_env: Path, db_session) -> None:
+    from productflow_backend.presentation.api import create_app
+
+    app = create_app()
+    client = TestClient(app)
+    _login(client)
+
+    created = client.post(
+        "/api/products",
+        data={"name": "scented candle", "category": "home goods", "price": "49.00"},
+        files=[
+            ("image", ("main.png", _make_demo_image_bytes(), "image/png")),
+            ("reference_images", ("ref.png", _make_demo_image_bytes(), "image/png")),
+        ],
+    )
+    assert created.status_code == 201
+    payload = created.json()
+    original_asset = next(asset for asset in payload["source_assets"] if asset["kind"] == "original_image")
+    reference_asset = next(asset for asset in payload["source_assets"] if asset["kind"] == "reference_image")
+
+    db_session.expire_all()
+    persisted_reference = db_session.get(SourceAsset, reference_asset["id"])
+    assert persisted_reference is not None
+    reference_path = Path(configured_env) / persisted_reference.storage_path
+    assert reference_path.exists()
+
+    deleted = client.delete(f"/api/source-assets/{reference_asset['id']}")
+    assert deleted.status_code == 200
+    assert all(asset["id"] != reference_asset["id"] for asset in deleted.json()["source_assets"])
+
+    db_session.expire_all()
+    assert db_session.get(SourceAsset, reference_asset["id"]) is None
+    assert not reference_path.exists()
+
+    rejected = client.delete(f"/api/source-assets/{original_asset['id']}")
+    assert rejected.status_code == 400
+    assert "Only product reference images can be deleted" in rejected.json()["detail"]

@@ -1,0 +1,37 @@
+.DS_Store
+.env
+.env.bak-*
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.debug/
+.release/
+dist/
+build/
+node_modules/
+*.egg-info/
+*.tsbuildinfo
+*.log
+backend/.venv/
+backend/.coverage
+backend/htmlcov/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+backend/uploads/
+backend/storage/
+backend/backend/storage/
+web/node_modules/
+web/dist/
+.env.dev
+backend/storage-dev/
+backend/backend/storage-dev/
+
+# CodeGraph local index (per-machine, not for committing)
+.codegraph/
+
+# Local AI memory
+.ai_memory/
