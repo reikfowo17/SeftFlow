@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => {
   const devProxyTarget = env.VITE_DEV_PROXY_TARGET || "http://127.0.0.1:29282";
   const allowedHosts = env.WEB_ALLOWED_HOSTS
     ? env.WEB_ALLOWED_HOSTS.split(",").map((host) => host.trim()).filter(Boolean)
-    : ["draw.devbin.de"];
+    : [];
 
   return {
     plugins: [react(), tailwindcss()],

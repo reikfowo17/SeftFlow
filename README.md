@@ -4,10 +4,6 @@
 
 # SeftFlow
 
-<p align="center">
-  <a href="https://draw.devbin.de"><strong>Live Demo</strong></a>
-</p>
-
 SeftFlow is an open-source, self-hosted product creative workspace for solo merchants and small teams. Its core flow covers product information, reference images, AI copywriting, AI/template posters, iterative image sessions, a generated image gallery, and a visual workflow.
 
 The current form is a private single-admin instance. A self-hosted deployment requires PostgreSQL, Redis, the backend API, Dramatiq worker, Web frontend, and usable text/image model providers.
