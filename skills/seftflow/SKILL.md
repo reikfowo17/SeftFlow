@@ -5,7 +5,7 @@ description: Use when the user wants to create a product, write product copy, or
 
 # SeftFlow Skill
 
-Drive a local [SeftFlow](https://github.com/yuqie6/SeftFlow) instance from Codex CLI or Claude as an MCP client. SeftFlow is a personal AI design partner for solo sellers and indie creators who need product posters fast.
+Drive a local [SeftFlow](https://github.com/reikfowo17/SeftFlow) instance from Codex CLI or Claude as an MCP client. SeftFlow is a personal AI design partner for solo sellers and indie creators who need product posters fast.
 
 ## When to use
 

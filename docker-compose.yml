@@ -82,7 +82,7 @@ services:
       - "${APP_HOST_PORT:-29280}:29280"
     volumes:
       # STORAGE_HOST_PATH is host-only. Leave it unset to use the productflow-storage named volume,
-      # or set it to an existing production directory such as /home/cot/SeftFlow-release/shared/storage.
+      # or set it to an existing production directory such as /path/to/SeftFlow-release/shared/storage.
       - ${STORAGE_HOST_PATH:-productflow-storage}:/app/storage
     depends_on:
       productflow-postgres:
